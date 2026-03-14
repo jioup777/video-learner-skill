@@ -1,12 +1,13 @@
 ---
 name: video-learner
-description: "Video learning assistant: download, transcribe, generate smart notes, and upload to Feishu. Use when: (1) processing Bilibili/YouTube videos, (2) generating structured notes from transcripts, (3) uploading notes to Feishu knowledge base. Supports: automatic download, Whisper transcription, intelligent note extraction, and Feishu integration."
+description: "Video learning assistant: download, transcribe, generate smart notes, and upload to Feishu. Use when: (1) processing Bilibili/YouTube videos, (2) generating structured notes from transcripts, (3) uploading notes to Feishu knowledge base. Supports: automatic download, ASR transcription (Aliyun/Whisper), intelligent note extraction, and Feishu integration."
 metadata:
   openclaw:
     emoji: "🎬"
     requires:
-      bins: ["yt-dlp", "whisper", "python3"]
+      bins: ["yt-dlp", "python3", "ffmpeg"]
       files: ["~/.openclaw/workspace-video-learner/cookies/bilibili_cookies.txt"]
+      env: ["ALIYUN_ASR_API_KEY"]
     install:
       - id: yt-dlp
         kind: pip
@@ -17,7 +18,16 @@ metadata:
         kind: pip
         package: openai-whisper
         bins: ["whisper"]
-        label: "Install OpenAI Whisper (pip)"
+        label: "Install OpenAI Whisper (pip, optional)"
+      - id: ffmpeg
+        kind: brew
+        package: ffmpeg
+        bins: ["ffmpeg"]
+        label: "Install FFmpeg (brew)"
+      - id: requests
+        kind: pip
+        package: requests
+        label: "Install requests (for Aliyun ASR)"
 ---
 
 # Video Learning Assistant 🎬
@@ -28,7 +38,7 @@ Process video links from Bilibili and YouTube, automatically transcribe with Whi
 
 ✅ **USE this skill when:**
 
-- Processing video links (Bilibili, YouTube)
+- Processing video links (Bilibili, YouTube, Douyin)
 - Transcribing video audio to text
 - Generating structured learning notes
 - Uploading notes to Feishu knowledge base
@@ -55,12 +65,25 @@ mkdir -p "$WORKSPACE"/{output,tmp,cookies,scripts}
 # 2. Export cookies using browser extension
 # 3. Save to: $WORKSPACE/cookies/bilibili_cookies.txt
 
-# Verify Whisper installation
+# ASR Configuration (阿里云 ASR 推荐)
+export ASR_ENGINE="aliyun"  # 或 "whisper"
+export ALIYUN_ASR_API_KEY="your_aliyun_api_key"
+export ASR_MODEL="fun-asr-mtl"  # 模型：fun-asr-mtl, paraformer-realtime-8k-v1, paraformer-realtime-16k-v1
+export ASR_TIMEOUT="60"  # 超时时间（秒）
+
+# Note Generation Configuration (GLM-4-Flash 推荐)
+export NOTE_ENGINE="glm"  # 或 "smart" (词频提取)
+export GLM_API_KEY="your_glm_api_key"  # 从 https://open.bigmodel.cn/ 获取
+
+# Verify Whisper installation (如果使用本地 Whisper)
 source ~/.openclaw/venv/bin/activate
 python -c "import whisper; print('Whisper OK')"
 
 # Verify yt-dlp installation
 yt-dlp --version
+
+# Verify ASR dependencies
+python3 -c "import requests; print('Requests OK')"
 ```
 
 ## Common Commands
@@ -82,7 +105,18 @@ yt-dlp --cookies "$WORKSPACE/cookies/bilibili_cookies.txt" \
   -o "/tmp/video.%(ext)s" \
   "https://www.bilibili.com/video/BVxxxxx"
 
-# Step 2: Transcribe with Whisper
+# Step 2: Transcribe with ASR
+# 选项 A: 使用阿里云 ASR（推荐，速度快 2-3 秒，准确率高）
+export ASR_ENGINE="aliyun"
+export ALIYUN_ASR_API_KEY="your_aliyun_api_key"
+export ASR_MODEL="fun-asr-mtl"
+
+python3 "$WORKSPACE/scripts/asr_router.py" \
+  --engine aliyun \
+  --output /tmp/video.txt \
+  /tmp/video.m4a
+
+# 选项 B: 使用本地 Whisper（免费，但速度较慢）
 source ~/.openclaw/venv/bin/activate
 whisper /tmp/video.m4a \
   --language Chinese \
@@ -91,6 +125,17 @@ whisper /tmp/video.m4a \
   --output_format txt
 
 # Step 3: Generate smart notes
+# 选项 A: 使用 GLM-4-Flash（推荐，质量高）
+export NOTE_ENGINE="glm"
+export GLM_API_KEY="your_glm_api_key"
+
+python3 "$WORKSPACE/scripts/glm_note_generator.py" \
+  /tmp/video.txt \
+  "Video Title"
+
+# 选项 B: 使用词频提取（免费，快速）
+export NOTE_ENGINE="smart"
+
 python3 "$WORKSPACE/scripts/smart_note_generator.py" \
   /tmp/video.txt \
   "Video Title"
@@ -101,6 +146,25 @@ python3 "$WORKSPACE/scripts/smart_note_generator.py" \
 # Step 5: Clean up temporary files
 find /tmp/video.* ! -name "*.txt" ! -name "*_smart_note.md" -delete
 ```
+
+### Process Douyin Videos
+
+```bash
+# Process Douyin video with full pipeline (download → extract → transcribe → notes → Feishu)
+cd "$WORKSPACE"
+./scripts/process_douyin.sh "https://v.douyin.com/xxxxx/"
+
+# The script will:
+# 1. Parse Douyin URL and extract video info
+# 2. Download video (no watermark)
+# 3. Extract audio using FFmpeg
+# 4. Transcribe with SenseVoice (fast) or Whisper (free)
+# 5. Generate smart notes (using smart_note_generator.py)
+# 6. Upload to Feishu knowledge base
+# 7. Clean up temporary files
+```
+
+**Note**: Douyin processing uses the `douyin-mcp-server` package which supports SenseVoice API for fast transcription. Requires `API_KEY` environment variable for SenseVoice.
 
 ### Intelligent Note Generation
 
@@ -138,16 +202,25 @@ yt-dlp -f "bestaudio" \
 ```
 ~/.openclaw/workspace-video-learner/
 ├── scripts/
-│   ├── video_with_feishu.sh        # Full pipeline (download → transcript → note → upload)
-│   ├── video_processor.sh           # Download → transcript → note
-│   ├── smart_note_generator.py      # Intelligent note extraction
-│   └── upload_feishu.sh           # Feishu upload helper
+│   ├── video_with_feishu.sh        # Bilibili/YouTube pipeline (download → transcript → note → upload)
+│   ├── video_processor.sh           # Bilibili/YouTube (download → transcript → note)
+│   ├── process_douyin.sh           # Douyin pipeline (download → extract → transcribe → notes → Feishu)
+│   ├── glm_note_generator.py       # GLM-4-Flash note generator (recommended)
+│   ├── smart_note_generator.py      # Smart note extraction (word frequency based)
+│   ├── asr_router.py               # ASR router (Aliyun/Whisper)
+│   ├── aliyun_asr.py              # Aliyun ASR client
+│   └── upload_feishu.sh            # Feishu upload helper
 ├── cookies/
 │   └── bilibili_cookies.txt        # Bilibili cookies (optional)
+├── douyin-mcp-server/              # Douyin processing (SenseVoice API)
+│   └── douyin-video/scripts/
+│       └── douyin_downloader.py
 ├── output/
-│   └── bilibili_BVxxxxx_note.md   # Generated notes
+│   ├── bilibili_BVxxxxx_note.md   # Bilibili/YouTube notes
+│   └── douyin_xxxxx_note.md       # Douyin notes
 └── tmp/
-    └── bilibili_BVxxxxx.txt       # Transcripts
+    ├── bilibili_BVxxxxx.txt       # Bilibili/YouTube transcripts
+    └── douyin_xxxxx.txt           # Douyin transcripts
 ```
 
 ## Feishu Integration
@@ -159,8 +232,8 @@ The Feishu upload requires OpenClaw tools in the main workflow:
 1. **Create Document Node**
 ```bash
 feishu_wiki action=create \
-  space_id="7566441763399581724" \
-  parent_node_token="I1GtwmgL4iok6WkfOghcR1uwnld" \
+  space_id="your_space_id" \
+  parent_node_token="your_parent_token" \
   title="Video Title (BVxxxxx)" \
   obj_type=docx
 ```
@@ -204,46 +277,104 @@ FEISHU_PARENT_TOKEN="your_parent_node_token"
 
 ## Performance Data
 
-| Video Duration | Download | Whisper | Note Gen | Upload | Total |
-|----------------|----------|---------|----------|--------|-------|
+### With Aliyun ASR + GLM-4-Flash
+
+| Video Duration | Download | Aliyun ASR | GLM Note Gen | Upload | Total |
+|----------------|----------|------------|--------------|--------|-------|
+| 2 min | ~2s | ~3s | ~5s | ~3s | ~13s |
+| 3 min | ~3s | ~4s | ~7s | ~4s | ~18s |
+| 5 min | ~5s | ~6s | ~10s | ~5s | ~26s |
+
+### With Whisper + Smart Note (Word Frequency)
+
+| Video Duration | Download | Whisper | Smart Note Gen | Upload | Total |
+|----------------|----------|---------|----------------|--------|-------|
 | 2 min | ~2s | ~30s | <1s | ~3s | ~36s |
 | 3 min | ~3s | ~45s | <1s | ~4s | ~53s |
 | 5 min | ~5s | ~75s | <1s | ~5s | ~86s |
 
+**Note**: GLM-4-Flash significantly improves note quality with ~5-10s overhead. Word frequency extraction is faster but less accurate.
+
 ## Smart Note Features
 
-### Automatic Extraction
+### Note Generation Engines
 
-- **Keywords**: Top 15 keywords by frequency (with stopword filtering)
+**GLM-4-Flash (Recommended)**
+- Uses GLM-4-Flash LLM for context-aware note generation
+- Extracts: Core Theme, Core Points, Typical Cases, Identification Methods, Anti-fraud Advice, Core Quotes
+- Understands context and produces high-quality structured notes
+- Requires GLM API Key
+
+**Smart Note (Word Frequency)**
+- Uses word frequency and pattern matching for note extraction
+- Extracts: Keywords, Key Sentences, Core Points, Practice Tips, Golden Quotes
+- Faster but less accurate
+- Free, no API required
+
+### Automatic Extraction (GLM-4-Flash)
+
+- **Core Theme**: Main topic identification
 - **Core Points**: 3-5 key insights extracted from transcript
-- **Practice Tips**: 3-5 actionable suggestions
+- **Typical Cases**: Real-world examples and case studies
+- **Identification Methods**: Methods for identifying patterns/issues
+- **Anti-fraud Advice**: Fraud prevention tips (when applicable)
 - **Core Quotes**: 5 impactful, short sentences
 - **Transcript**: Full text preserved
 
-### Note Structure
+### Note Structure (GLM-4-Flash)
 
 ```markdown
 # Video Title
 
-## 📹 Video Information
-- Video ID, Platform, Processing Time, Status
+## 📹 视频信息
+- Video ID, Platform, Processing Time, Status, Token Consumption
 
-## 🔑 Keywords
-15 most frequent keywords
+## 核心主题
+Main topic of the video
 
-## ⭐ Core Points
-3-5 key insights
+## 核心观点
+3-5 key insights from the content
 
-## 💡 Key Information
-Important sentences containing keywords
+## 典型案例
+Real-world examples and case studies
 
-## 🎯 Practice Tips
-3-5 actionable suggestions
+## 识别方法
+Methods for identifying patterns/issues
 
-## ✨ Core Quotes
+## 防骗建议
+Fraud prevention tips (when applicable)
+
+## 核心金句
 5 impactful quotes
 
-## 📝 Complete Transcript
+## 📝 完整转录内容
+Full transcript text
+```
+
+### Note Structure (Smart Note)
+
+```markdown
+# Video Title
+
+## 📹 视频信息
+- Video ID, Platform, Processing Time, Status
+
+## 🔑 关键词
+15 most frequent keywords
+
+## ⭐ 核心观点
+3-5 key insights
+
+## 💡 关键句子
+Important sentences containing keywords
+
+## 🎯 实践建议
+3-5 actionable suggestions
+
+## ✨ 核心金句
+5 impactful quotes
+
+## 📝 完整转录内容
 Full transcript text
 ```
 
@@ -427,7 +558,24 @@ cd ~/.openclaw/workspace-video-learner
 # Note: Feishu upload not included (requires OpenClaw tools)
 ```
 
-### Example 3: Generate Notes from Transcript
+### Example 3: Douyin Video
+
+```bash
+# Process Douyin video
+cd ~/.openclaw/workspace-video-learner
+./scripts/process_douyin.sh "https://v.douyin.com/7600361826030865707/"
+
+# Output:
+# - Video: /tmp/douyin_7600361826030865707.mp4
+# - Audio: /tmp/douyin_7600361826030865707.mp3
+# - Transcript: /tmp/douyin_7600361826030865707.txt
+# - Notes: output/douyin_7600361826030865707_note.md
+# - Feishu Link: https://vicyrpffceo.feishu.cn/wiki/<node_token>
+```
+
+**Note**: Douyin processing requires SenseVoice API. If `API_KEY` is not set, the script falls back to Whisper (slower but free).
+
+### Example 4: Generate Notes from Transcript
 
 ```bash
 # Generate notes from existing transcript

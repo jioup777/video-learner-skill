@@ -8,9 +8,13 @@ set -e
 WORKSPACE="/home/ubuntu/.openclaw/workspace-video-learner"
 OUTPUT_DIR="${WORKSPACE}/output"
 TMP_DIR="/tmp"
+SCRIPT_DIR="${WORKSPACE}/scripts"
 
 # B站 Cookies（可选）
 BILIBILI_COOKIES="${WORKSPACE}/cookies/bilibili_cookies.txt"
+
+# 笔记生成引擎选择（smart 或 glm，默认 glm）
+NOTE_ENGINE="${NOTE_ENGINE:-glm}"
 
 # ========== 工具函数 ==========
 GREEN='\033[0;32m'
@@ -136,7 +140,6 @@ generate_note() {
     local video_title=$2
     local platform=$3
     local video_id=$4
-    local note_file="${OUTPUT_DIR}/${platform}_${video_id}_note.md"
 
     log_step "步骤 3/4: 生成学习笔记..."
 
@@ -145,41 +148,30 @@ generate_note() {
         return 1
     fi
 
-    cat > "$note_file" << EOF
-# ${video_title}
+    local note_file
 
-## 📹 视频信息
-- **视频 ID**: \`${video_id}\`
-- **平台**: ${platform^}
-- **处理时间**: $(date '+%Y-%m-%d %H:%M')
-- **处理状态**: ✅ 已完成
+    # 选择笔记生成引擎
+    if [[ "$NOTE_ENGINE" == "smart" ]]; then
+        log_info "使用词频提取引擎..."
+        python3 "${SCRIPT_DIR}/smart_note_generator.py" "$transcript_file" "$video_title"
+        note_file="${transcript_file%.txt}_smart_note.md"
+    else
+        log_info "使用 GLM-4-Flash 引擎..."
+        python3 "${SCRIPT_DIR}/glm_note_generator.py" "$transcript_file" "$video_title"
+        note_file="${transcript_file%.txt}_glm_note.md"
+    fi
 
----
+    if [[ ! -f "$note_file" ]]; then
+        log_error "❌ 笔记生成失败"
+        return 1
+    fi
 
-## 📝 转录内容
-
-\`\`\`
-$(cat "$transcript_file")
-\`\`\`
-
----
-
-## 💡 核心观点
-> （此部分待 AI 智能提取）
-
-## 🔍 关键信息
-> （此部分待 AI 智能提取）
-
-## ⚡ 实践建议
-> （此部分待 AI 智能提取）
-
-## 📌 核心金句
-> （此部分待 AI 智能提取）
-
----
-*🤖 此笔记由 [视频助手](https://github.com/openclaw/openclaw) 自动生成*
-*📅 生成时间：$(date '+%Y-%m-%d %H:%M:%S')*
-EOF
+    # 如果笔记不在输出目录，移动到输出目录
+    if [[ ! "$note_file" =~ ^"$OUTPUT_DIR" ]]; then
+        local final_note_file="${OUTPUT_DIR}/${platform}_${video_id}_note.md"
+        mv "$note_file" "$final_note_file"
+        note_file="$final_note_file"
+    fi
 
     log_info "✓ 笔记已生成：$(basename "$note_file") ($(du -h "$note_file" | cut -f1))"
     echo "$note_file"

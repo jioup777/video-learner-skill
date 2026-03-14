@@ -1,6 +1,6 @@
 #!/bin/bash
-# 视频学习助手 - 完整流程（集成飞书上传）
-# 功能：视频链接 → 音频下载 → Whisper 转录 → 笔记生成 → 飞书上传播 → 清理文件
+# 抖音视频学习助手 - 完整流程
+# 功能：抖音视频链接 → 音频下载 → ASR 转录 → 笔记生成 → 飞书上传 → 清理文件
 
 set -e
 
@@ -10,12 +10,15 @@ OUTPUT_DIR="${WORKSPACE}/output"
 TMP_DIR="/tmp"
 SCRIPT_DIR="${WORKSPACE}/scripts"
 
-# B站 Cookies
-BILIBILI_COOKIES="${WORKSPACE}/cookies/bilibili_cookies.txt"
-
 # Feishu 配置（从环境变量读取，或手动配置）
 FEISHU_SPACE_ID="${FEISHU_SPACE_ID:-YOUR_SPACE_ID}"
 FEISHU_PARENT_TOKEN="${FEISHU_PARENT_TOKEN:-YOUR_PARENT_NODE_TOKEN}"
+
+# ASR 配置
+ASR_ENGINE="${ASR_ENGINE:-aliyun}"
+ALIYUN_ASR_API_KEY="${ALIYUN_ASR_API_KEY:-your_aliyun_api_key}"
+ASR_MODEL="${ASR_MODEL:-fun-asr-mtl}"
+WHISPER_MODEL="${WHISPER_MODEL:-base}"
 
 # 笔记生成引擎选择（smart 或 glm，默认 glm）
 NOTE_ENGINE="${NOTE_ENGINE:-glm}"
@@ -33,69 +36,64 @@ log_step() { echo -e "${BLUE}[STEP]${NC} $1" >&2; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 # ========== 主处理流程 ==========
-process_video() {
+process_douyin() {
     local video_url=$1
     local start_time=$(date +%s)
 
     if [[ -z "$video_url" ]]; then
-        log_error "❌ 请提供视频链接"
+        log_error "❌ 请提供抖音视频链接"
         return 1
     fi
 
     echo "" >&2
-    echo "🎬 开始处理视频" >&2
+    echo "🎵 开始处理抖音视频" >&2
     echo "========================================" >&2
 
     # 1. 下载音频
-    log_step "步骤 1/5: 下载音频..."
+    log_step "步骤 1/5: 下载抖音音频..."
 
-    local output="${TMP_DIR}/test_download.%(ext)s"
-    local download_cmd="yt-dlp"
+    local output="${TMP_DIR}/douyin_%(id)s.%(ext)s"
 
-    if [[ -f "$BILIBILI_COOKIES" ]]; then
-        download_cmd="$download_cmd --cookies $BILIBILI_COOKIES"
-    fi
+    # 使用 yt-dlp 下载抖音视频音频
+    yt-dlp -f "bestaudio" -o "$output" "$video_url" > /dev/null 2>&1
 
-    $download_cmd -f "bestaudio" -o "$output" "$video_url" > /dev/null 2>&1
-
-    local audio_file=$(ls -t "${TMP_DIR}/test_download".* 2>/dev/null | grep -v '\.txt$' | head -1)
+    local audio_file=$(ls -t "${TMP_DIR}/douyin_"*.* 2>/dev/null | grep -v '\.txt$' | head -1)
 
     if [[ -z "$audio_file" ]]; then
         log_error "❌ 音频下载失败"
         return 1
     fi
 
-    local video_id=$(basename "$audio_file" | grep -oP '\w+')
-    local platform="bilibili"
+    local video_id=$(basename "$audio_file" | grep -oP 'douyin_\K\w+')
+    local platform="douyin"
 
     log_info "✓ 音频已下载: $(basename "$audio_file") ($(du -h "$audio_file" | cut -f1))"
 
     # 2. 语音转录（支持阿里云 ASR 和 Whisper）
     log_step "步骤 2/5: 语音转录..."
 
-    local transcript_file="${TMP_DIR}/test_download.txt"
-    local asr_engine="${ASR_ENGINE:-aliyun}"  # 默认使用阿里云 ASR
+    local transcript_file="${TMP_DIR}/douyin_${video_id}.txt"
 
     # 激活 Python 虚拟环境
     source /home/ubuntu/.openclaw/venv/bin/activate > /dev/null 2>&1
 
     # 使用 ASR 路由器进行转录
-    if [[ "$asr_engine" == "aliyun" ]]; then
-        log_info "使用阿里云 ASR (模型: ${ASR_MODEL:-fun-asr-mtl})..."
+    if [[ "$ASR_ENGINE" == "aliyun" ]]; then
+        log_info "使用阿里云 ASR (模型: $ASR_MODEL)..."
         
         python3 "${SCRIPT_DIR}/asr_router.py" \
             --engine aliyun \
-            --api-key "${ALIYUN_ASR_API_KEY}" \
-            --model "${ASR_MODEL:-fun-asr-mtl}" \
+            --api-key "$ALIYUN_ASR_API_KEY" \
+            --model "$ASR_MODEL" \
             --timeout 60 \
             --output "$transcript_file" \
             "$audio_file" 2>&1 | grep -E '(✓|❌|错误)' || true
     else
-        log_info "使用本地 Whisper..."
+        log_info "使用本地 Whisper (模型: $WHISPER_MODEL)..."
         
         python3 "${SCRIPT_DIR}/asr_router.py" \
             --engine whisper \
-            --whisper-model "${WHISPER_MODEL:-base}" \
+            --whisper-model "$WHISPER_MODEL" \
             --output "$transcript_file" \
             "$audio_file" 2>&1 | grep -E '(✓|❌|错误)' || true
     fi
@@ -116,7 +114,7 @@ process_video() {
     local video_title=$(yt-dlp --get-title "$video_url" 2>/dev/null | head -1)
 
     if [[ -z "$video_title" ]]; then
-        video_title="${platform^} 视频 ${video_id}"
+        video_title="抖音视频 ${video_id}"
     fi
 
     log_info "✓ 视频标题: $video_title"
@@ -124,7 +122,7 @@ process_video() {
     # 4. 生成笔记（支持 smart 和 glm 两种引擎）
     log_step "步骤 4/5: 生成学习笔记..."
 
-    local note_file="${OUTPUT_DIR}/${platform}_${video_id}_note.md"
+    local note_file="${OUTPUT_DIR}/douyin_${video_id}_note.md"
 
     # 选择笔记生成引擎
     if [[ "$NOTE_ENGINE" == "smart" ]]; then
@@ -140,6 +138,13 @@ process_video() {
     if [[ ! -f "$note_file" ]]; then
         log_error "❌ 笔记生成失败"
         return 1
+    fi
+
+    # 如果笔记不在输出目录，移动到输出目录
+    if [[ ! "$note_file" =~ ^"$OUTPUT_DIR" ]]; then
+        local final_note_file="${OUTPUT_DIR}/douyin_${video_id}_note.md"
+        mv "$note_file" "$final_note_file"
+        note_file="$final_note_file"
     fi
 
     log_info "✓ 笔记已生成: $(basename "$note_file") ($(du -h "$note_file" | cut -f1))"
@@ -174,18 +179,14 @@ process_video() {
         log_info "✓ 飞书文档链接: $feishu_link"
 
         # 保存链接到文件
-        echo "$feishu_link" > "${TMP_DIR}/test_download.link"
         echo "$feishu_link" > "${note_file}.link"
     fi
 
     # 6. 清理临时文件
     log_step "步骤 6/6: 清理临时文件..."
 
-    find "${TMP_DIR}/test_download".* \
-        ! -name "*.txt" \
-        ! -name "*_note.md" \
-        ! -name "*.link" \
-        -delete 2>/dev/null || true
+    # 保留转录文件和笔记，删除音频文件
+    rm -f "$audio_file" 2>/dev/null || true
 
     log_info "✓ 临时文件清理完成"
 
@@ -194,9 +195,9 @@ process_video() {
 
     echo "" >&2
     echo "========================================" >&2
-    echo "  ✅ 视频处理完成" >&2
+    echo "  ✅ 抖音视频处理完成" >&2
     echo "========================================" >&2
-    echo "  视频：${platform^} ${video_id}" >&2
+    echo "  视频：抖音 ${video_id}" >&2
     echo "  耗时：${duration} 秒" >&2
     echo "  笔记：$note_file" >&2
     echo "========================================" >&2
@@ -208,14 +209,20 @@ process_video() {
 # ========== 入口 ==========
 main() {
     if [[ $# -eq 0 ]]; then
-        log_error "用法：$0 <视频链接>"
+        log_error "用法：$0 <抖音视频链接>"
         echo ""
         echo "示例:"
-        echo "  $0 https://www.bilibili.com/video/BVxxxxx"
+        echo "  $0 https://www.douyin.com/video/1234567890"
+        echo ""
+        echo "环境变量配置:"
+        echo "  ASR_ENGINE          - ASR 引擎（aliyun/whisper，默认：aliyun）"
+        echo "  ALIYUN_ASR_API_KEY  - 阿里云 API Key"
+        echo "  ASR_MODEL           - ASR 模型名称（默认：fun-asr-mtl）"
+        echo "  WHISPER_MODEL       - Whisper 模型（默认：base）"
         exit 1
     fi
 
-    process_video "$1"
+    process_douyin "$1"
 }
 
 main "$@"

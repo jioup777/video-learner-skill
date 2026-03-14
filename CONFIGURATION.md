@@ -29,7 +29,20 @@
    # Edit .env and fill in your values
    ```
 
-3. **Configure Bilibili Cookies (Optional but Recommended)**
+3. **Configure GLM-4-Flash (Recommended)**
+
+   Get your GLM API Key:
+
+   a. Visit https://open.bigmodel.cn/
+   b. Login and navigate to API Key management
+   c. Create a new API Key
+   d. Set environment variable:
+
+   ```bash
+   export GLM_API_KEY="your_glm_api_key"
+   ```
+
+4. **Configure Bilibili Cookies (Optional but Recommended)**
 
    See [COOKIES.md](COOKIES.md) for detailed instructions.
 
@@ -53,7 +66,16 @@ WORKSPACE="${HOME}/.openclaw/workspace-video-learner"
 FEISHU_SPACE_ID="your_space_id"
 FEISHU_PARENT_TOKEN="your_parent_node_token"
 
-# Whisper
+# Note Generation (GLM-4-Flash 推荐)
+NOTE_ENGINE="glm"
+GLM_API_KEY="your_glm_api_key"
+
+# ASR Configuration
+ASR_ENGINE="aliyun"
+ALIYUN_ASR_API_KEY="your_aliyun_api_key"
+ASR_MODEL="fun-asr-mtl"
+
+# Whisper (仅当 ASR_ENGINE=whisper 时使用)
 WHISPER_MODEL="base"
 
 # Bilibili
@@ -82,8 +104,13 @@ FEISHU_PARENT_TOKEN="your_actual_parent_node_token"
 | Variable | Description | Required | Example |
 |----------|-------------|----------|---------|
 | `WORKSPACE` | Workspace directory | No | `${HOME}/.openclaw/workspace-video-learner` |
-| `FEISHU_SPACE_ID` | Feishu space ID | Yes (for upload) | `7566441763399581724` |
-| `FEISHU_PARENT_TOKEN` | Feishu parent node token | Yes (for upload) | `I1GtwmgL4iok6WkfOghcR1uwnld` |
+| `FEISHU_SPACE_ID` | Feishu space ID | Yes (for upload) | `your_space_id` |
+| `FEISHU_PARENT_TOKEN` | Feishu parent node token | Yes (for upload) | `your_parent_token` |
+| `NOTE_ENGINE` | Note generation engine (glm/smart) | No | `glm` |
+| `GLM_API_KEY` | GLM-4-Flash API Key | Yes (for glm engine) | `sk-xxxxx` |
+| `ASR_ENGINE` | ASR engine (aliyun/whisper) | No | `aliyun` |
+| `ALIYUN_ASR_API_KEY` | Aliyun ASR API Key | Yes (for aliyun engine) | `sk-xxxxx` |
+| `ASR_MODEL` | Aliyun ASR model | No | `fun-asr-mtl` |
 | `WHISPER_MODEL` | Whisper model size | No | `base` |
 | `BILIBILI_COOKIES` | Bilibili cookies file path | No (for Bilibili) | `/path/to/cookies.txt` |
 
@@ -186,6 +213,19 @@ whisper --version
 # Should see version number, e.g., "20230314"
 ```
 
+### Test GLM-4-Flash
+
+```bash
+# Set GLM API Key
+export GLM_API_KEY="your_glm_api_key"
+
+# Test note generation
+cd ~/.openclaw/workspace-video-learner
+python3 scripts/glm_note_generator.py /tmp/test_transcript.txt "Test Video"
+
+# Should see token consumption statistics
+```
+
 ## Advanced Configuration
 
 ### Custom Whisper Model
@@ -229,4 +269,4 @@ FEISHU_SPACE_ID="space1" ./scripts/video_with_feishu.sh "url"
 
 ---
 
-Last Updated: 2026-03-12
+Last Updated: 2026-03-14

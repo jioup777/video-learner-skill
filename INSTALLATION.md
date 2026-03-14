@@ -135,8 +135,8 @@ The agent can invoke this skill with the appropriate command.
 
 ### Feishu Integration
 - ✅ Feishu API tools configured
-- ✅ Space ID: 7566441763399581724
-- ✅ Parent Node: I1GtwmgL4iok6WkfOghcR1uwnld
+- ✅ Space ID: your_space_id
+- ✅ Parent Node: your_parent_token
 - ✅ Knowledge Base: 个人工作用记录
 
 ### Workspace Integration
