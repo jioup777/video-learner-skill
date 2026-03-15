@@ -4,21 +4,17 @@ description: "Video learning assistant: download, transcribe, generate smart not
 metadata:
   openclaw:
     emoji: "🎬"
-    requires:
-      bins: ["yt-dlp", "python3", "ffmpeg", "f2"]
-      files: ["~/.openclaw/workspace-video-learner/cookies/bilibili_cookies.txt"]
-      env: ["GLM_API_KEY", "ALIYUN_ASR_API_KEY", "FEISHU_SPACE_ID", "FEISHU_PARENT_TOKEN"]
+  requires:
+    bins: ["yt-dlp", "python3", "ffmpeg"]
+    files: ["~/.openclaw/workspace-video-learner/cookies/bilibili_cookies.txt"]
+    env: ["GLM_API_KEY", "ALIYUN_ASR_API_KEY", "FEISHU_APP_ID", "FEISHU_APP_SECRET"]
     install:
       - id: yt-dlp
         kind: pip
         package: yt-dlp
         bins: ["yt-dlp"]
         label: "Install yt-dlp"
-      - id: f2
-        kind: pip
-        package: f2
-        bins: ["f2"]
-        label: "Install f2 (Douyin downloader)"
+
       - id: ffmpeg
         kind: brew
         package: ffmpeg
@@ -32,11 +28,11 @@ metadata:
 
 ## 平台差异化策略
 
-| 平台 | 下载方案 | 字幕来源 |
-|------|----------|----------|
-| **Bilibili** | cookies + yt-dlp | ASR转录 |
-| **YouTube** | yt-dlp | 官方字幕优先，无则ASR |
-| **Douyin** | f2 (无水印) | ASR转录 |
+| 平台 | 下载方案 | 字幕来源 | 特殊功能 |
+|------|----------|----------|----------|
+| **Bilibili** | cookies + yt-dlp | ASR转录 | cookies验证、412错误提示 |
+| **YouTube** | yt-dlp + cookies | 官方字幕优先，无则ASR | 多语言字幕检测、浏览器cookies支持 |
+| **Douyin** | requests API | ASR转录 | 无需f2库、自动fallback |
 
 ## 快速开始
 
@@ -83,8 +79,8 @@ python scripts/video_learner.py "url" --no-upload
 ```env
 GLM_API_KEY=xxx           # GLM API密钥
 ALIYUN_ASR_API_KEY=xxx    # 阿里云ASR密钥
-FEISHU_SPACE_ID=xxx       # 飞书空间ID
-FEISHU_PARENT_TOKEN=xxx   # 飞书父节点Token
+FEISHU_APP_ID=xxx         # 飞书应用ID
+FEISHU_APP_SECRET=xxx     # 飞书应用密钥
 ```
 
 ### 可选配置
@@ -97,7 +93,7 @@ WORKSPACE=~/.openclaw/workspace-video-learner
 ## 处理流程
 
 ```
-视频URL → 平台识别 → 下载/字幕获取 → ASR转录(如需) → GLM笔记生成 → 飞书上传
+视频URL → 平台识别 → 下载/字幕获取 → ASR转录(如需，自动分段) → GLM笔记生成 → 飞书上传(API)
 ```
 
 ### YouTube特有逻辑
@@ -122,12 +118,14 @@ YouTube URL → 检测官方字幕
 │   ├── video_learner.py       # 统一入口
 │   ├── downloaders/
 │   │   ├── __init__.py
-│   │   ├── bilibili.py        # B站下载
-│   │   ├── youtube.py         # YouTube下载+字幕
-│   │   └── douyin.py          # 抖音下载(f2)
-│   ├── asr_aliyun.py          # 阿里云ASR
+│   │   ├── bilibili.py        # B站下载(cookies验证)
+│   │   ├── youtube.py         # YouTube下载(字幕优先)
+│   │   └── douyin.py          # 抖音下载(requests API)
+│   ├── asr_aliyun.py          # 阿里云ASR(自动分段)
 │   ├── note_generator.py      # GLM笔记生成
-│   └── feishu_uploader.py     # 飞书上传
+│   ├── feishu_uploader.py     # 飞书上传(直接API)
+│   ├── exceptions.py          # 统一异常类
+│   └── utils.py               # 工具函数(重试装饰器)
 ├── cookies/
 │   └── bilibili_cookies.txt   # B站cookies
 └── output/                    # 生成的笔记
@@ -137,12 +135,17 @@ YouTube URL → 检测官方字幕
 
 ```bash
 # 核心依赖
-pip install yt-dlp dashscope python-dotenv
+pip install yt-dlp dashscope python-dotenv requests
 
-# JavaScript运行时 (YouTube需要)
+# JavaScript运行时 (YouTube推荐，非必需)
 # Windows: https://github.com/denoland/deno/releases
 # macOS: brew install deno
 # Linux: curl -fsSL https://deno.land/install.sh | sh
+
+# FFmpeg (必需，用于音频处理)
+# Windows: https://ffmpeg.org/download.html
+# macOS: brew install ffmpeg
+# Ubuntu: apt install ffmpeg
 ```
 
 ## 平台特殊要求
@@ -150,40 +153,46 @@ pip install yt-dlp dashscope python-dotenv
 ### B站
 - 需要有效的cookies文件
 - 获取方式：浏览器扩展导出Netscape格式cookies
+- 自动验证cookies有效性
+- 412错误时提供详细解决方案
 
 ### YouTube  
 - **需要cookies** - YouTube反爬虫机制
 - **建议安装deno** - JavaScript运行时，用于解析YouTube页面
-- Cookies获取：使用 `yt-dlp --cookies-from-browser chrome "URL"` 或手动导出
+- 支持浏览器cookies：`yt-dlp --cookies-from-browser chrome "URL"`
+- 多语言字幕检测：zh-CN, zh-Hans, zh, zh-TW, zh-Hant, en
 - 参考：https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies
 
 ### 抖音
-- 需要安装f2库：`pip install f2`
+- **无需f2库** - 使用requests API直接下载
+- 自动fallback机制
+- 支持分享链接：https://v.douyin.com/xxxxx/
 
 ## 常见问题
 
 ### B站下载失败 (412错误)
-需要配置有效的B站cookies：
-1. 登录B站
-2. 使用浏览器扩展导出cookies
-3. 保存到 `cookies/bilibili_cookies.txt`
+系统会提供详细解决方案：
+1. 更新cookies文件（推荐使用EditThisCookie扩展）
+2. 或使用浏览器cookies：`yt-dlp --cookies-from-browser chrome "URL"`
+3. SESSDATA有效期约1个月，需定期更新
 
 ### 抖音下载失败
-确保已安装f2：
-```bash
-pip install f2
-f2 --version
-```
+确保网络可访问douyin.com，无需安装f2库。
+
+### ASR转录失败
+- 检查DASHSCOPE_API_KEY是否正确
+- 大文件会自动分段（9MB阈值）
+- 确保FFmpeg已安装：`ffmpeg -version`
 
 ### 飞书上传失败
 检查：
-- FEISHU_SPACE_ID 是否正确
-- FEISHU_PARENT_TOKEN 是否有写权限
-- OpenClaw飞书工具是否配置正确
+- FEISHU_APP_ID 和 FEISHU_APP_SECRET 是否正确
+- 飞书应用权限是否包含"知识库文档写入"
+- 可在飞书开放平台获取应用凭证
 
 ### YouTube字幕未检测到
 - 部分视频没有官方字幕，会自动回退到ASR
-- 字幕检测支持：zh-CN, zh-Hans, zh, zh-TW, zh-Hant
+- 字幕检测支持：zh-CN, zh-Hans, zh, zh-TW, zh-Hant, en
 
 ## 获取API密钥
 
@@ -204,9 +213,12 @@ f2 --version
 
 ### 新增
 - 统一入口 `video_learner.py`
-- YouTube官方字幕优先
-- 抖音f2无水印下载
-- 平台差异化处理
+- YouTube官方字幕优先 + 多语言检测
+- 抖音requests API下载（无需f2）
+- ASR大文件自动分段（9MB阈值）
+- Feishu直接API调用（无需OpenClaw CLI）
+- 统一异常类和重试机制
+- Cookies验证和详细错误提示
 
 ### 删除
 - ~~双ASR引擎切换~~ → 固定阿里云
@@ -214,9 +226,12 @@ f2 --version
 - ~~Whisper本地支持~~ → 简化依赖
 - ~~smart_note_generator.py~~ → 效果不佳
 - ~~video_processor.sh~~ → 合并到统一入口
+- ~~f2库依赖~~ → 抖音改用requests API
+- ~~OpenClaw飞书工具~~ → 直接API调用
 
 ### 配置简化
 - 从10+项 → 4项必需配置
+- 飞书认证从Token改为AppID+Secret
 
 ---
 

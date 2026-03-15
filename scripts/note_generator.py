@@ -1,6 +1,6 @@
 """
 GLM笔记生成模块
-使用GLM-4.7 Coding端点生成结构化学习笔记
+使用GLM编码套餐专属Coding端点生成结构化学习笔记
 """
 
 import os
@@ -14,7 +14,7 @@ import urllib.error
 
 class GLMNoteGenerator:
     API_URL = "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
-    MODEL = "glm-4.7"
+    MODEL = "glm-4-flash"  # GLM编码套餐专属模型
     
     SYSTEM_PROMPT = """你是一位专业的学习笔记整理专家。请根据视频转录文本，整理成结构化的学习笔记。
 
@@ -131,7 +131,7 @@ class GLMNoteGenerator:
 ## 📹 视频信息
 - **视频标题**: {video_title}
 - **处理时间**: {now.strftime('%Y-%m-%d %H:%M')}
-- **生成引擎**: GLM-4.7
+- **生成引擎**: GLM-4-Flash
 
 ---
 
@@ -152,7 +152,7 @@ class GLMNoteGenerator:
 
 ---
 
-*🤖 此笔记由 Video Learner 使用 GLM-4.7 智能生成*
+*🤖 此笔记由 Video Learner 使用 GLM-4-Flash 智能生成*
 *📅 生成时间: {now.strftime('%Y-%m-%d %H:%M:%S')}*
 """
         

@@ -7,10 +7,13 @@ import os
 import re
 import subprocess
 import tempfile
+import shutil
+import requests
 import sys
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 YT_DLP_CMD = [sys.executable, '-m', 'yt_dlp']
 PROXY = os.getenv('HTTPS_PROXY') or os.getenv('HTTP_PROXY') or os.getenv('VIDEO_LEARNER_PROXY')  # 可选代理
@@ -26,16 +29,21 @@ class DownloadResult:
 
 
 class YouTubeDownloader:
+    USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    
     def __init__(self):
         self.temp_dir = tempfile.gettempdir()
+        self.cookies_file = os.getenv('YOUTUBE_COOKIES_PATH') or str(
+            Path(__file__).parent.parent.parent / 'cookies' / 'youtube_cookies.txt'
+        )
     
     def process(self, url: str) -> DownloadResult:
         """处理YouTube视频"""
         video_id = self._extract_video_id(url)
         
-        title = self._get_title(url)
+        title = self._get_title(url, video_id)
         
-        has_subtitle, subtitle_lang = self._check_subtitles(url)
+        has_subtitle, subtitle_lang = self._check_subtitles(url, video_id)
         
         if has_subtitle:
             subtitle_file = self._download_subtitle(url, video_id, subtitle_lang)
@@ -69,11 +77,31 @@ class YouTubeDownloader:
                 return match.group(1)
         return "unknown"
     
-    def _get_title(self, url: str) -> str:
+    def _get_title(self, url: str, video_id: str = None) -> str:
         try:
             cmd = YT_DLP_CMD + ['--get-title']
+            
+            # 添加Cookies（优先级：cookies文件 > 浏览器cookies）
+            if Path(self.cookies_file).exists():
+                cmd.extend(['--cookies', self.cookies_file])
+            elif shutil.which('chrome') and not PROXY:
+                # 尝试从浏览器读取Cookies
+                try:
+                    result = subprocess.run(
+                        ['yt-dlp', '--cookies-from-browser', 'chrome', '--get-title', url],
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        return result.stdout.strip()
+                except:
+                    pass
+            
+            # 添加代理
             if PROXY:
                 cmd.extend(['--proxy', PROXY])
+            
             cmd.append(url)
             result = subprocess.run(
                 cmd,
@@ -85,13 +113,16 @@ class YouTubeDownloader:
                 return result.stdout.strip()
         except Exception:
             pass
-        return "YouTube视频"
+        return "YouTube视频" if not video_id else "Unknown YouTube Video"
     
-    def _check_subtitles(self, url: str) -> Tuple[bool, Optional[str]]:
+    def _check_subtitles(self, url: str, video_id: str = None) -> Tuple[bool, Optional[str]]:
         try:
             cmd = YT_DLP_CMD + ['--list-subs']
+            
+            # 添加代理
             if PROXY:
                 cmd.extend(['--proxy', PROXY])
+            
             cmd.append(url)
             result = subprocess.run(
                 cmd,
@@ -102,27 +133,41 @@ class YouTubeDownloader:
             
             output = result.stdout
             
-            chinese_langs = ['zh-CN', 'zh-Hans', 'zh', 'zh-TW', 'zh-Hant', 'Chinese']
+            # 优先检测中文字幕（更全面）
+            chinese_lang_patterns = [
+                r'zh(?:-CN|-Hans|TW|Hant)',
+                r'Chinese',
+                r'\u4e2d\u4e2e\u7e2e\u6e80',  # 中文unicode
+            ]
             
             for line in output.split('\n'):
-                for lang in chinese_langs:
-                    if lang in line:
-                        return True, lang.split('-')[0] if '-' in lang else lang
-            
-            for line in output.split('\n'):
-                for lang in chinese_langs:
-                    if lang.lower() in line.lower():
-                        if 'zh-cn' in line.lower() or 'zh-hans' in line.lower():
+                for pattern in chinese_lang_patterns:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        if 'zh-CN' in line:
                             return True, 'zh-Hans'
-                        elif 'zh-tw' in line.lower() or 'zh-hant' in line.lower():
+                        elif 'zh-Hant' in line:
                             return True, 'zh-Hant'
-                        elif 'zh' in line.lower():
+                        elif 'zh-TW' in line:
+                            return True, 'zh-TW'
+                        elif 'zh' in line:
+                            return True, 'zh'
+                        elif 'Chinese' in line:
                             return True, 'zh'
             
-        except Exception:
-            pass
-        
-        return False, None
+            # 未找到中文字幕，尝试英文字幕（可能需要翻译）
+            result = subprocess.run(
+                YT_DLP_CMD + ['--list-subs', '--sub-lang', 'en', url],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if 'en' in result.stdout.lower():
+                print("  [YouTube] 未找到中文字幕，将使用英文字幕（可能需要GLM翻译）")
+                return True, 'en'
+            
+        except Exception as e:
+            print(f"  [YouTube] 字幕检测失败: {e}")
+            return False, None
     
     def _download_subtitle(self, url: str, video_id: str, lang: str) -> str:
         output_path = Path(self.temp_dir) / f"youtube_{video_id}"
@@ -133,6 +178,8 @@ class YouTubeDownloader:
             '--skip-download',
             '-o', str(output_path),
         ]
+        
+        # 添加代理
         if PROXY:
             cmd.extend(['--proxy', PROXY])
         
@@ -146,7 +193,8 @@ class YouTubeDownloader:
         )
         
         for ext in ['.zh-Hans.vtt', '.zh-CN.vtt', '.zh.vtt', '.vtt',
-                     '.zh-Hans.srt', '.zh-CN.srt', '.zh.srt', '.srt']:
+                     '.zh-Hans.srt', '.zh-CN.srt', '.zh.srt', '.srt',
+                     '.en.vtt', '.en.srt']:
             subtitle_file = Path(self.temp_dir) / f"youtube_{video_id}{ext}"
             if subtitle_file.exists():
                 return str(subtitle_file)
@@ -205,6 +253,8 @@ class YouTubeDownloader:
             '-o', output_template,
             '--no-playlist',
         ]
+        
+        # 添加代理
         if PROXY:
             cmd.extend(['--proxy', PROXY])
         
@@ -218,7 +268,21 @@ class YouTubeDownloader:
         )
         
         if result.returncode != 0:
-            raise RuntimeError(f"YouTube下载失败: {result.stderr.strip()}")
+            error_msg = result.stderr.strip() if result.stderr else "未知错误"
+            
+            # 412错误 - Cookies问题（详细提示）
+            if '412' in error_msg or 'Precondition Failed' in error_msg:
+                raise RuntimeError(
+                    "YouTube下载失败(412): Cookies无效或过期\n\n"
+                    f"解决方案:\n"
+                    f"1. 更新Cookies文件: {self.cookies_file}\n"
+                    f"   格式: Netscape HTTP Cookie File\n\n"
+                    f"获取方式: 浏览器扩展导出（推荐: EditThisCookie）\n"
+                    f"2. 或尝试浏览器Cookies: --cookies-from-browser chrome\n\n"
+                    f"3. 确认网络环境（海外服务器无需代理）\n"
+                )
+            
+            raise RuntimeError(f"YouTube下载失败: {error_msg}")
         
         for ext in ['.m4a', '.webm', '.opus', '.mp3']:
             audio_file = Path(self.temp_dir) / f"youtube_{video_id}{ext}"
@@ -226,3 +290,26 @@ class YouTubeDownloader:
                 return str(audio_file)
         
         raise RuntimeError("音频文件未找到，下载可能失败")
+
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) < 2:
+        print("用法: python youtube.py <YouTube链接>")
+        sys.exit(1)
+    
+    url = sys.argv[1]
+    print(f"YouTube链接: {url}")
+    
+    downloader = YouTubeDownloader()
+    
+    try:
+        result = downloader.process(url)
+        print(f"\n[OK] 下载成功:")
+        print(f"  标题: {result.title}")
+        print(f"  音频: {result.audio_file}")
+        print(f"  需要转录: {result.needs_transcription}")
+    except Exception as e:
+        print(f"\n[ERROR] 下载失败: {e}")
+        sys.exit(1)
